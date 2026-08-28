@@ -25,6 +25,7 @@
   const el = {
     search: document.getElementById('search'),
     rescan: document.getElementById('rescan'),
+    configBtn: document.getElementById('config-btn'),
     showHidden: document.getElementById('show-hidden'),
     noPreview: document.getElementById('no-preview'),
     grid: document.getElementById('grid'),
@@ -894,6 +895,128 @@
     return { body, close, isDisposed: () => disposed };
   }
 
+  // ---- configuration modal (extension/folder blacklists, applied on next rescan) ----
+
+  function buildConfigSection({ title, hint, placeholder, values, endpoint, resultKey, formatChip }) {
+    const section = document.createElement('div');
+    section.className = 'config-section';
+
+    const heading = document.createElement('h3');
+    heading.textContent = title;
+    const hintEl = document.createElement('p');
+    hintEl.className = 'config-hint';
+    hintEl.textContent = hint;
+
+    const addRow = document.createElement('div');
+    addRow.className = 'config-add-row';
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.placeholder = placeholder;
+    const addBtn = document.createElement('button');
+    addBtn.type = 'button';
+    addBtn.textContent = 'Add';
+    addRow.append(input, addBtn);
+
+    const list = document.createElement('div');
+    list.className = 'config-list';
+
+    function renderList() {
+      list.innerHTML = '';
+      if (!values.length) {
+        const empty = document.createElement('div');
+        empty.className = 'config-empty';
+        empty.textContent = 'None';
+        list.appendChild(empty);
+        return;
+      }
+      for (const v of values) {
+        const chip = document.createElement('span');
+        chip.className = 'config-chip';
+        const label = document.createElement('span');
+        label.textContent = formatChip(v);
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'config-chip-remove';
+        remove.textContent = '×';
+        remove.title = `Remove "${v}"`;
+        remove.addEventListener('click', () => submit('remove', v));
+        chip.append(label, remove);
+        list.appendChild(chip);
+      }
+    }
+
+    async function submit(action, value) {
+      try {
+        const res = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action, value }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed to update configuration');
+        values.length = 0;
+        values.push(...data[resultKey]);
+        renderList();
+      } catch (e) {
+        showToast(e.message);
+      }
+    }
+
+    function addFromInput() {
+      const value = input.value.trim();
+      if (!value) return;
+      input.value = '';
+      submit('add', value);
+    }
+
+    addBtn.addEventListener('click', addFromInput);
+    input.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key === 'Enter') addFromInput();
+    });
+
+    renderList();
+    section.append(heading, hintEl, addRow, list);
+    return section;
+  }
+
+  async function openConfigModal() {
+    const { body } = createViewerShell({ name: 'Configuration' }, { bodyClass: 'viewer-body-config' });
+
+    let config = { blacklistExtensions: [], blacklistFolders: [] };
+    try {
+      const res = await fetch('/api/config');
+      config = await res.json();
+    } catch {
+      showToast('Could not load configuration');
+    }
+
+    body.appendChild(buildConfigSection({
+      title: 'Blacklisted extensions',
+      hint: 'Files with these extensions are skipped on the next rescan.',
+      placeholder: 'e.g. psd',
+      values: config.blacklistExtensions,
+      endpoint: '/api/config/extensions',
+      resultKey: 'blacklistExtensions',
+      formatChip: (v) => `.${v}`,
+    }));
+
+    body.appendChild(buildConfigSection({
+      title: 'Blacklisted folders',
+      hint: 'Folders whose path relative to the library root exactly matches an entry (and everything inside them) are skipped on the next rescan, e.g. "Packs/Old Stuff".',
+      placeholder: 'e.g. Packs/Old Stuff',
+      values: config.blacklistFolders,
+      endpoint: '/api/config/folders',
+      resultKey: 'blacklistFolders',
+      formatChip: (v) => v,
+    }));
+
+    const note = document.createElement('div');
+    note.className = 'config-note';
+    note.textContent = 'Changes apply on the next rescan.';
+    body.appendChild(note);
+  }
+
   function openImagePreview(item) {
     const { body } = createViewerShell(item, { bodyClass: 'viewer-body-image' });
     const img = document.createElement('img');
@@ -1067,6 +1190,8 @@
     state.tags.clear();
     onFiltersChanged();
   });
+
+  el.configBtn.addEventListener('click', openConfigModal);
 
   el.rescan.addEventListener('click', async () => {
     el.rescan.disabled = true;

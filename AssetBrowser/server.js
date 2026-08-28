@@ -6,6 +6,7 @@ const { exec, spawn } = require('child_process');
 const { buildIndex } = require('./indexer');
 const cacheStore = require('./cache');
 const hashCacheStore = require('./hash-cache');
+const configStore = require('./config');
 
 // No more requiring assets to live under a specific folder structure - the
 // browser always scans its own parent folder, recursively, for whatever is there.
@@ -13,7 +14,9 @@ const ASSETS_ROOT = process.env.ASSETS_ROOT || path.resolve(__dirname, '..');
 const PORT = process.env.PORT || 4747;
 const F3D_BIN = process.env.F3D_BIN || 'f3d';
 const PWSH_BIN = process.env.PWSH_BIN || 'powershell.exe';
+const BLENDER_BIN = process.env.BLENDER_BIN || 'blender';
 const RENDER_TIMEOUT_MS = 30000;
+const BLEND_CONVERT_TIMEOUT_MS = 90000;
 
 // Preferred format to hand over when copying a file to the clipboard - fbx
 // first since that's the most broadly importable format for game engines /
@@ -25,10 +28,14 @@ app.use(express.json());
 
 let assetCache = cacheStore.loadCache();
 let fileHashCache = hashCacheStore.loadHashCache();
+let appConfig = configStore.loadConfig();
 let cachedIndex = null;
 
 function reindex() {
-  const items = buildIndex(ASSETS_ROOT);
+  const items = buildIndex(ASSETS_ROOT, {
+    blacklistExtensions: appConfig.blacklistExtensions,
+    blacklistFolders: appConfig.blacklistFolders,
+  });
   cacheStore.reconcile(assetCache, items);
   cacheStore.saveCache(assetCache);
   cachedIndex = items;
@@ -82,6 +89,36 @@ function recycleFiles(absPaths) {
 
 class ModelAssetError extends Error {}
 
+// f3d has no loader for .blend, so previewing one means exporting it to FBX
+// via Blender's own CLI first. The export is cached next to the source
+// (<base>.blendpreview.fbx, filtered out of the index by indexer.js) and
+// reused as long as it's newer than the .blend, so repeat preview/thumbnail
+// requests don't re-launch Blender every time.
+function ensureFbxFromBlend(blendPath) {
+  const dir = path.dirname(blendPath);
+  const base = path.basename(blendPath, path.extname(blendPath));
+  const outPath = path.join(dir, `${base}.blendpreview.fbx`);
+
+  const blendMtimeMs = fs.statSync(blendPath).mtimeMs;
+  if (fs.existsSync(outPath) && fs.statSync(outPath).mtimeMs >= blendMtimeMs) {
+    return Promise.resolve(outPath);
+  }
+
+  return new Promise((resolve, reject) => {
+    const pyExpr = `import bpy; bpy.ops.export_scene.fbx(filepath=${JSON.stringify(outPath)})`;
+    const proc = spawn(BLENDER_BIN, ['--background', blendPath, '--python-expr', pyExpr], { timeout: BLEND_CONVERT_TIMEOUT_MS });
+    let stdout = '';
+    let stderr = '';
+    proc.stdout.on('data', (d) => { stdout += d; });
+    proc.stderr.on('data', (d) => { stderr += d; });
+    proc.on('error', (err) => reject(new Error(`Could not launch Blender (${BLENDER_BIN}): ${err.message}`)));
+    proc.on('close', (code) => {
+      if (code === 0 && fs.existsSync(outPath)) resolve(outPath);
+      else reject(new Error((stdout + stderr).trim() || `Blender exited with code ${code}`));
+    });
+  });
+}
+
 app.get('/api/assets', (req, res) => {
   res.json(getIndex());
 });
@@ -89,6 +126,40 @@ app.get('/api/assets', (req, res) => {
 app.post('/api/rescan', (req, res) => {
   reindex();
   res.json({ count: cachedIndex.length });
+});
+
+app.get('/api/config', (req, res) => {
+  res.json(appConfig);
+});
+
+// Blacklist edits only touch the saved config - they take effect on the next
+// /api/rescan rather than triggering an immediate reindex.
+app.post('/api/config/extensions', (req, res) => {
+  const { action, value } = req.body || {};
+  const ext = configStore.normalizeExt(value);
+  if (!ext) return res.status(400).json({ error: 'Extension is required' });
+
+  if (action === 'remove') {
+    appConfig.blacklistExtensions = appConfig.blacklistExtensions.filter((e) => e !== ext);
+  } else if (!appConfig.blacklistExtensions.includes(ext)) {
+    appConfig.blacklistExtensions.push(ext);
+  }
+  configStore.saveConfig(appConfig);
+  res.json(appConfig);
+});
+
+app.post('/api/config/folders', (req, res) => {
+  const { action, value } = req.body || {};
+  const folder = configStore.normalizeFolder(value);
+  if (!folder) return res.status(400).json({ error: 'Folder path is required' });
+
+  if (action === 'remove') {
+    appConfig.blacklistFolders = appConfig.blacklistFolders.filter((f) => f !== folder);
+  } else if (!appConfig.blacklistFolders.some((f) => f.toLowerCase() === folder.toLowerCase())) {
+    appConfig.blacklistFolders.push(folder);
+  }
+  configStore.saveConfig(appConfig);
+  res.json(appConfig);
 });
 
 app.get('/api/tags', (req, res) => {
@@ -216,14 +287,14 @@ app.post('/api/copy-file', (req, res) => {
   });
 });
 
-app.post('/api/generate-thumb', (req, res) => {
+app.post('/api/generate-thumb', async (req, res) => {
   const { id, force } = req.body || {};
   const item = getIndex().find((i) => i.id === id);
   if (!item) return res.status(404).json({ error: 'not found' });
   if (item.thumb && !force) return res.json({ ok: true, thumb: item.thumb, alreadyExisted: true });
   if (!item.renderPath) {
     return res.status(422).json({
-      error: `No renderable format for "${item.name}" - only ${item.formats.join('/')} available (need glb, gltf, obj, or fbx).`,
+      error: `No renderable format for "${item.name}" - only ${item.formats.join('/')} available (need glb, gltf, obj, fbx, or blend).`,
     });
   }
 
@@ -237,6 +308,15 @@ app.post('/api/generate-thumb', (req, res) => {
   const base = path.basename(renderPath, path.extname(renderPath));
   const outPath = path.join(dir, `${base}_thumb.png`);
 
+  let sourcePath = renderPath;
+  if (extOf(renderPath) === 'blend') {
+    try {
+      sourcePath = await ensureFbxFromBlend(renderPath);
+    } catch (e) {
+      return res.status(500).json({ error: `Blender conversion failed: ${e.message}` });
+    }
+  }
+
   // f3d's native glTF/OBJ readers resolve the input through a URI parser that
   // rejects "[" and "]" - characters that show up constantly in asset-store
   // pack folder names (e.g. "MegaKit[Standard]"). Stage a bracket-free copy
@@ -246,7 +326,7 @@ app.post('/api/generate-thumb', (req, res) => {
   let stageDir;
   let stagedInput;
   try {
-    ({ stageDir, stagedInput } = stageForRender(renderPath));
+    ({ stageDir, stagedInput } = stageForRender(sourcePath));
   } catch (e) {
     if (e instanceof ModelAssetError) return res.status(422).json({ error: e.message });
     throw e;
@@ -421,7 +501,7 @@ function stageForRender(renderPath) {
   return { stageDir, stagedInput: dest };
 }
 
-app.get('/api/model-assets/:id', (req, res) => {
+app.get('/api/model-assets/:id', async (req, res) => {
   const id = Number(req.params.id);
   const item = getIndex().find((i) => i.id === id);
   if (!item) return res.status(404).json({ error: 'not found' });
@@ -433,8 +513,17 @@ app.get('/api/model-assets/:id', (req, res) => {
     return res.status(404).json({ error: `Source file no longer exists: ${renderPath}` });
   }
 
+  let sourcePath = renderPath;
+  if (extOf(renderPath) === 'blend') {
+    try {
+      sourcePath = await ensureFbxFromBlend(renderPath);
+    } catch (e) {
+      return res.status(500).json({ error: `Blender conversion failed: ${e.message}` });
+    }
+  }
+
   try {
-    res.json(collectModelAssets(renderPath));
+    res.json(collectModelAssets(sourcePath));
   } catch (e) {
     if (e instanceof ModelAssetError) return res.status(422).json({ error: e.message });
     throw e;

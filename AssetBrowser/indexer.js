@@ -20,8 +20,10 @@ const FORMAT_DIR_NAMES = new Set([
 const NOISE_NAME_RE = /(overview|preview|^sample$|readme|license|atlas)/i;
 
 const MODEL_FORMAT_PRIORITY = ['glb', 'gltf', 'obj', 'fbx', 'blend'];
-// Formats f3d can actually load (natively or via its assimp plugin) - blend
-// has no loader there, so an item shipping only that has no path to a preview.
+// Formats f3d can actually load (natively or via its assimp plugin). Blend
+// has no loader there, so an item shipping only that format falls back to
+// its raw .blend path (see the modelGroups loop below) - server.js detects
+// that and converts it to a temporary FBX via Blender before handing it to f3d.
 const RENDERABLE_PRIORITY = ['glb', 'gltf', 'obj', 'fbx'];
 const IMAGE_THUMB_PRIORITY = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'svg'];
 const AUDIO_PRIMARY_PRIORITY = ['mp3', 'wav', 'ogg', 'flac', 'm4a', 'aiff'];
@@ -38,6 +40,11 @@ const SKIP_DIR_NAMES = new Set(['.git', 'node_modules']);
 const EXCLUDED_FILENAMES = new Set(['thumbs.db', 'desktop.ini']);
 const EXCLUDED_EXTS = new Set(['meta', 'mtl', 'bin']);
 
+// Suffix for the FBX server.js generates on demand from a .blend (see
+// ensureFbxFromBlend there) - a render cache artifact, never itself a
+// browsable asset.
+const BLEND_PREVIEW_SUFFIX = '.blendpreview.fbx';
+
 function extOf(filename) {
   return path.extname(filename).slice(1).toLowerCase();
 }
@@ -51,10 +58,11 @@ function toUrlPath(p) {
 }
 
 // Recursively walks `dir`, calling onDir(dir, fileNames) for every directory
-// that directly contains at least one file. `skipDirs` is a set of resolved
-// absolute paths to exclude entirely (used to keep the app's own folder out
-// of its own index).
-function walk(dir, onDir, skipDirs) {
+// that directly contains at least one file. `skipDirs` is a set of resolved,
+// lowercased absolute paths to exclude entirely (used to keep the app's own
+// folder out of its own index, and to honor the folder blacklist). `blacklistExts`
+// is a set of lowercased extensions (no leading dot) to skip everywhere.
+function walk(dir, onDir, skipDirs, blacklistExts) {
   let entries;
   try {
     entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -67,12 +75,15 @@ function walk(dir, onDir, skipDirs) {
     const full = path.join(dir, e.name);
     if (e.isDirectory()) {
       if (SKIP_DIR_NAMES.has(e.name.toLowerCase())) continue;
-      if (skipDirs.has(path.resolve(full))) continue;
-      walk(full, onDir, skipDirs);
+      if (skipDirs.has(path.resolve(full).toLowerCase())) continue;
+      walk(full, onDir, skipDirs, blacklistExts);
     } else if (e.isFile()) {
       const lower = e.name.toLowerCase();
       if (EXCLUDED_FILENAMES.has(lower)) continue;
-      if (EXCLUDED_EXTS.has(extOf(e.name))) continue;
+      if (lower.endsWith(BLEND_PREVIEW_SUFFIX)) continue;
+      const ext = extOf(e.name);
+      if (EXCLUDED_EXTS.has(ext)) continue;
+      if (blacklistExts.has(ext)) continue;
       files.push(e.name);
     }
   }
@@ -149,11 +160,17 @@ function formatFilesOf(exts, base) {
   return formatFiles;
 }
 
-function buildIndex(root) {
+function buildIndex(root, options = {}) {
   const items = [];
   let idCounter = 0;
   const consumed = new Set(); // `${dir}::${file}` already claimed by an earlier group
-  const selfDir = path.resolve(__dirname);
+  const selfDir = path.resolve(__dirname).toLowerCase();
+
+  const blacklistExts = new Set((options.blacklistExtensions || []).map((e) => String(e).toLowerCase()));
+  // User-supplied paths are relative to `root` (e.g. "Packs/Old Stuff") -
+  // resolved once here so walk() can compare against them like any other skip dir.
+  const blacklistFolderDirs = (options.blacklistFolders || []).map((f) => path.resolve(root, f).toLowerCase());
+  const skipDirs = new Set([selfDir, ...blacklistFolderDirs]);
 
   // ---- pass 1: collect every file, recursively, from the library root ----
   const records = []; // { dir, relDir, category, theme, pack, itemSubpath, file, ext }
@@ -167,7 +184,7 @@ function buildIndex(root) {
     for (const file of files) {
       records.push({ dir, relDir, category, theme, pack, itemSubpath, file, ext: extOf(file) });
     }
-  }, new Set([selfDir]));
+  }, skipDirs, blacklistExts);
 
   const byDir = new Map(); // dir -> file list, used later for thumbnail lookup
   for (const r of records) {
@@ -205,7 +222,9 @@ function buildIndex(root) {
       }
     }
 
-    const renderExt = RENDERABLE_PRIORITY.find((e) => g.exts.has(e));
+    // Fall back to the raw .blend when it's the only format shipped - server.js
+    // converts it to FBX on demand before rendering (see BLEND_PREVIEW_SUFFIX).
+    const renderExt = RENDERABLE_PRIORITY.find((e) => g.exts.has(e)) || (g.exts.has('blend') ? 'blend' : null);
     const renderPath = renderExt ? path.join(g.exts.get(renderExt), `${g.base}.${renderExt}`) : null;
 
     items.push({
