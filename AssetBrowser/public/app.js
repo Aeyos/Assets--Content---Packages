@@ -148,6 +148,22 @@
     el.loadMore.hidden = shownCount >= filtered.length;
   }
 
+  // Deletes an item's file(s) on disk (via the server, which recycles rather
+  // than hard-deleting) and drops it from the in-memory model entirely - unlike
+  // hiding, a deleted item is gone, not just filtered out.
+  async function deleteAsset(item) {
+    const res = await fetch(`/api/assets/${item.id}`, { method: 'DELETE' });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Delete failed');
+  }
+
+  function removeItemPermanently(item) {
+    const idx = allItems.indexOf(item);
+    if (idx !== -1) allItems.splice(idx, 1);
+    removeCardFromView(item);
+    rebuildFilterPills();
+  }
+
   function refreshKnownTagsList() {
     el.knownTagsList.innerHTML = '';
     for (const t of knownTags) {
@@ -492,7 +508,7 @@
     openDuplicatesReport(clusters, { scanned, total: targets.length, cancelled });
   }
 
-  function buildDupeRow(entry, kind, label) {
+  function buildDupeRow(entry, kind, label, onDelete) {
     const row = document.createElement('div');
     row.className = 'dupe-item';
 
@@ -522,7 +538,14 @@
     revealBtn.title = 'Reveal in Explorer';
     revealBtn.addEventListener('click', () => reveal(entry.item));
 
-    row.append(badge, info, meta, revealBtn);
+    const deleteBtn = document.createElement('button');
+    deleteBtn.className = 'icon-btn dupe-delete';
+    deleteBtn.type = 'button';
+    deleteBtn.appendChild(makeIcon('delete'));
+    deleteBtn.title = 'Delete this file and its preview thumbnail (sent to Recycle Bin)';
+    deleteBtn.addEventListener('click', () => onDelete(deleteBtn));
+
+    row.append(badge, info, meta, revealBtn, deleteBtn);
     return row;
   }
 
@@ -537,6 +560,17 @@
       + ` - ${formatBytes(wastedTotal)} reclaimable by removing the newer copies.`;
     body.appendChild(summary);
 
+    const deleteAllBtn = document.createElement('button');
+    deleteAllBtn.id = 'delete-all-dupes';
+    deleteAllBtn.type = 'button';
+    deleteAllBtn.textContent = 'Delete all offending files';
+    body.appendChild(deleteAllBtn);
+
+    // One state entry per duplicate-set box, so a row deletion (single or
+    // bulk) can update that box's header/wasted-space text, or drop the
+    // whole box once fewer than two copies remain in it.
+    const groups = [];
+
     for (const group of clusters) {
       const [original, ...offenders] = group;
       const box = document.createElement('div');
@@ -545,19 +579,108 @@
 
       const header = document.createElement('div');
       header.className = 'dupe-group-header';
-      header.textContent = `${group.length} identical files, ${formatBytes(original.size)} each`;
+      const headerLabel = document.createElement('span');
       const wasted = document.createElement('span');
       wasted.className = 'wasted';
-      wasted.textContent = `(${formatBytes(original.size * offenders.length)} reclaimable)`;
-      header.appendChild(wasted);
+      header.append(headerLabel, wasted);
       box.appendChild(header);
 
-      box.appendChild(buildDupeRow(original, 'original', 'Kept - oldest copy'));
-      for (const off of offenders) {
-        box.appendChild(buildDupeRow(off, 'offender', 'Duplicate - newer, blame this folder'));
+      const state = { box, rows: [] };
+      function refreshHeader() {
+        const count = state.rows.length;
+        headerLabel.textContent = `${count} identical file${count === 1 ? '' : 's'}, ${formatBytes(original.size)} each`;
+        const offenderCount = state.rows.filter((r) => r.kind === 'offender').length;
+        wasted.textContent = offenderCount ? ` (${formatBytes(original.size * offenderCount)} reclaimable)` : '';
       }
+      state.refreshHeader = refreshHeader;
+
+      async function handleDelete(entry, kind, row, btn) {
+        if (!confirm(`Delete "${entry.item.name}" (${itemFolderPath(entry.item)})?\n\nThe file and its preview thumbnail will be sent to the Recycle Bin.`)) return;
+        btn.disabled = true;
+        btn.classList.add('busy');
+        try {
+          await deleteAsset(entry.item);
+          row.remove();
+          state.rows = state.rows.filter((r) => r.row !== row);
+          removeItemPermanently(entry.item);
+          if (state.rows.length < 2) box.remove();
+          else refreshHeader();
+        } catch (e) {
+          btn.disabled = false;
+          btn.classList.remove('busy');
+          btn.classList.add('failed');
+          showToast(e.message);
+        }
+      }
+
+      const originalRow = buildDupeRow(original, 'original', 'Kept - oldest copy', (btn) => handleDelete(original, 'original', originalRow, btn));
+      box.appendChild(originalRow);
+      state.rows.push({ kind: 'original', row: originalRow, entry: original });
+
+      for (const off of offenders) {
+        const offRow = buildDupeRow(off, 'offender', 'Duplicate - newer, blame this folder', (btn) => handleDelete(off, 'offender', offRow, btn));
+        box.appendChild(offRow);
+        state.rows.push({ kind: 'offender', row: offRow, entry: off });
+      }
+
+      refreshHeader();
       body.appendChild(box);
+      groups.push(state);
     }
+
+    let deleteAllRunning = false;
+    let deleteAllCancel = false;
+
+    deleteAllBtn.addEventListener('click', async () => {
+      if (deleteAllRunning) {
+        deleteAllCancel = true;
+        deleteAllBtn.disabled = true;
+        deleteAllBtn.textContent = 'Stopping…';
+        return;
+      }
+
+      const targets = [];
+      for (const g of groups) {
+        for (const r of g.rows) if (r.kind === 'offender') targets.push({ group: g, ...r });
+      }
+      if (!targets.length) {
+        showToast('No offending files left to delete');
+        return;
+      }
+      if (!confirm(`Delete all ${targets.length} offending file(s)? They'll be sent to the Recycle Bin. The oldest copy in each set is kept.`)) return;
+
+      deleteAllRunning = true;
+      deleteAllCancel = false;
+      deleteAllBtn.classList.add('active');
+      let done = 0;
+      let failed = 0;
+
+      for (const t of targets) {
+        if (deleteAllCancel) break;
+        deleteAllBtn.textContent = `Stop (${done}/${targets.length})`;
+        try {
+          await deleteAsset(t.entry.item);
+          t.row.remove();
+          t.group.rows = t.group.rows.filter((r) => r.row !== t.row);
+          removeItemPermanently(t.entry.item);
+          if (t.group.rows.length < 2) t.group.box.remove();
+          else t.group.refreshHeader();
+        } catch {
+          failed++;
+        }
+        done++;
+      }
+
+      const cancelled = deleteAllCancel;
+      deleteAllRunning = false;
+      deleteAllCancel = false;
+      deleteAllBtn.classList.remove('active');
+      deleteAllBtn.disabled = false;
+      deleteAllBtn.textContent = 'Delete all offending files';
+      showToast(cancelled
+        ? `Stopped after ${done}/${targets.length} (${failed} failed)`
+        : `Deleted ${done - failed}/${targets.length}${failed ? `, ${failed} failed` : ''}`);
+    });
   }
 
   async function copyFile(item, btn) {

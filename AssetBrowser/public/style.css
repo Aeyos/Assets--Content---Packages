@@ -596,6 +596,27 @@ main {
   font-size: 13px;
 }
 
+#delete-all-dupes {
+  align-self: flex-start;
+  padding: 5px 12px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: #ff8b87;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+#delete-all-dupes:hover { border-color: #d9534f; }
+
+#delete-all-dupes.active {
+  color: #fff;
+  background: #d9534f;
+  border-color: #d9534f;
+}
+
+#delete-all-dupes:disabled { cursor: default; opacity: 0.7; }
+
 .dupe-group {
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -672,3 +693,5 @@ main {
   color: var(--text-dim);
   white-space: nowrap;
 }
+
+.dupe-delete:hover { border-color: #d9534f; color: #ff8b87; }

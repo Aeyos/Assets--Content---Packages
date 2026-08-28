@@ -62,6 +62,24 @@ function psQuote(str) {
   return `'${String(str).replace(/'/g, "''")}'`;
 }
 
+// Sends files to the Windows Recycle Bin (rather than a hard delete) so a
+// mis-flagged "duplicate" can still be recovered by hand.
+function recycleFiles(absPaths) {
+  return new Promise((resolve, reject) => {
+    if (!absPaths.length) return resolve();
+    const list = absPaths.map(psQuote).join(',');
+    const script = `Add-Type -AssemblyName Microsoft.VisualBasic; foreach ($p in @(${list})) { if (Test-Path -LiteralPath $p) { [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile($p, 'OnlyErrorDialogs', 'SendToRecycleBin') } }`;
+    const proc = spawn(PWSH_BIN, ['-NoProfile', '-NonInteractive', '-Command', script]);
+    let stderr = '';
+    proc.stderr.on('data', (d) => { stderr += d; });
+    proc.on('error', (err) => reject(new Error(`Could not launch ${PWSH_BIN}: ${err.message}`)));
+    proc.on('close', (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(stderr.trim() || `Recycle exited with code ${code}`));
+    });
+  });
+}
+
 class ModelAssetError extends Error {}
 
 app.get('/api/assets', (req, res) => {
@@ -114,6 +132,45 @@ app.post('/api/assets/:id/hidden', (req, res) => {
   cacheStore.persistItem(assetCache, item);
   cacheStore.saveCache(assetCache);
   res.json({ hidden: item.hidden });
+});
+
+// Deletes an item's file(s) - every format it ships (fbx+obj siblings count as
+// one item) plus its generated thumbnail - recycling rather than unlinking,
+// and drops the item from the in-memory index and both on-disk caches so it
+// doesn't reappear until the next full rescan.
+app.delete('/api/assets/:id', async (req, res) => {
+  const id = Number(req.params.id);
+  const idx = getIndex();
+  const itemIdx = idx.findIndex((i) => i.id === id);
+  if (itemIdx === -1) return res.status(404).json({ error: 'not found' });
+  const item = idx[itemIdx];
+
+  const targets = new Set(Object.values(item.formatFiles));
+  if (item.thumb) targets.add(path.join(ASSETS_ROOT, ...item.thumb.split('/')));
+
+  const resolvedPaths = [];
+  for (const filePath of targets) {
+    const resolved = withinRoot(filePath);
+    if (!resolved) return res.status(400).json({ error: 'invalid path' });
+    resolvedPaths.push(resolved);
+  }
+
+  try {
+    await recycleFiles(resolvedPaths);
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
+
+  for (const resolved of resolvedPaths) {
+    const relKey = path.relative(ASSETS_ROOT, resolved).split(path.sep).join('/');
+    delete fileHashCache[relKey];
+  }
+  hashCacheStore.saveHashCache(fileHashCache);
+  delete assetCache.assets[item.key];
+  cacheStore.saveCache(assetCache);
+  idx.splice(itemIdx, 1);
+
+  res.json({ ok: true });
 });
 
 app.post('/api/reveal', (req, res) => {
