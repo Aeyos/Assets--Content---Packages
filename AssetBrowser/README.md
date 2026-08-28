@@ -32,6 +32,7 @@ It was built to browse a personal, informally organized asset dump (marketplace 
 - Hide/unhide items without touching anything on disk.
 - One-click "reveal in Explorer" and "copy file to clipboard" (Windows only - see [Platform support](#platform-support)).
 - "Regenerate all previews" to (re)render thumbnails in bulk for whatever the current filters/search are showing, with progress and the ability to stop mid-run.
+- "Find duplicates" hashes whatever the current filters/search are showing (one item at a time, with progress and the ability to stop mid-run, hashes cached to disk so a re-run only re-hashes what's changed) and reports byte-identical files living in different folders - the oldest copy is kept as the "original" and every newer copy is flagged with the folder it lives in, so you know exactly what to clean up.
 - Nothing is ever written to, moved, or deleted from your asset library - the only files this app creates are the generated `*_thumb.png` thumbnails and its own local cache.
 
 ## Requirements
@@ -124,6 +125,7 @@ Re-scan the library at any time with the **Rescan** button in the header, or `PO
 - Each card has four icon buttons: hide/unhide, copy file to clipboard, regenerate preview, and reveal in Explorer.
 - **Show hidden** (top right) toggles whether hidden items are included in search/filter results at all.
 - **Regenerate all previews** re-renders thumbnails for every renderable item currently matched by your search/filters, one at a time, and can be stopped mid-run.
+- **Find duplicates** hashes every item currently matched by your search/filters, one at a time, and can be stopped mid-run. Items whose file content is byte-identical are grouped together; within each group the file with the oldest modified time is treated as the original and every newer one is flagged as a duplicate, showing the folder it lives in (and a "reveal in Explorer" shortcut) so you can decide what to delete. Nothing is deleted automatically. File hashes are cached to disk (`hash-cache.json`) keyed by path/size/modified-time, so re-running it only re-hashes files that changed since the last run.
 
 ## Tagging
 
@@ -157,6 +159,7 @@ All endpoints are JSON over HTTP, served by `server.js`.
 | `POST` | `/api/reveal` | Open Explorer with the item's file selected (`{ id }`). Windows only. |
 | `POST` | `/api/copy-file` | Copy the item's file to the clipboard (`{ id }`). Windows only. |
 | `POST` | `/api/generate-thumb` | (Re)generate a model's thumbnail via F3D (`{ id, force }`). |
+| `POST` | `/api/hash-item` | Hash one item's file, sha1, reusing the on-disk cache when the file is unchanged (`{ id }`). |
 | `GET` | `/api/model-assets/:id` | Resolve a model's main file plus every referenced sibling file, for the in-browser viewer. |
 | `GET` | `/files/*` | Static, read-only access to anything under `ASSETS_ROOT`. |
 | `GET` | `/vendor/f3d/*` | Serves the bundled F3D WebAssembly viewer build. |
@@ -171,8 +174,10 @@ AssetBrowser/
   server.js              Express server: indexing lifecycle, thumbnail generation, all API routes
   indexer.js              Recursive folder walk -> grouped, typed asset list
   cache.js                Loads/saves asset-cache.json; reconciles tags/hidden state across rescans
+  hash-cache.js            Loads/saves hash-cache.json; sha1 file hashing with a size/mtime cache
   auto-tag.js              Keyword-based first-pass tagging
   asset-cache.json         Persisted tags + hidden state (generated - not meant to be hand-edited)
+  hash-cache.json          Persisted file hashes for the duplicate finder (generated - not meant to be hand-edited)
   package.json
   public/
     index.html             App shell

@@ -180,7 +180,7 @@ main {
   font-size: 13px;
 }
 
-#regen-all {
+#regen-all, #find-dupes {
   padding: 5px 12px;
   border-radius: 7px;
   border: 1px solid var(--border);
@@ -190,15 +190,15 @@ main {
   font-size: 12px;
 }
 
-#regen-all:hover { color: var(--text); border-color: var(--accent); }
+#regen-all:hover, #find-dupes:hover { color: var(--text); border-color: var(--accent); }
 
-#regen-all.active {
+#regen-all.active, #find-dupes.active {
   color: var(--accent-text);
   background: var(--accent);
   border-color: var(--accent);
 }
 
-#regen-all:disabled { cursor: default; opacity: 0.7; }
+#regen-all:disabled, #find-dupes:disabled { cursor: default; opacity: 0.7; }
 
 .grid {
   display: grid;
@@ -581,4 +581,94 @@ main {
 
 .viewer-body-audio audio {
   width: min(420px, 80%);
+}
+
+.viewer-body-dupes {
+  overflow-y: auto;
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.dupes-summary {
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+.dupe-group {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  background: var(--panel-2);
+  flex: none;
+}
+
+.dupe-group-header {
+  font-size: 12.5px;
+  color: var(--text);
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.dupe-group-header .wasted {
+  font-weight: 400;
+  color: var(--text-dim);
+  margin-left: 6px;
+}
+
+.dupe-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 0;
+  border-top: 1px solid var(--border);
+}
+
+.dupe-item:first-child { border-top: none; }
+
+.dupe-badge {
+  flex: none;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-radius: 999px;
+  padding: 2px 8px;
+  white-space: nowrap;
+}
+
+.dupe-badge.original {
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+}
+
+.dupe-badge.offender {
+  color: #ffb37a;
+  border: 1px solid #7a4a20;
+  background: rgba(255, 140, 40, 0.08);
+}
+
+.dupe-info { min-width: 0; flex: 1; }
+
+.dupe-name {
+  font-size: 12.5px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dupe-path {
+  font-size: 11px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dupe-meta {
+  flex: none;
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
 }

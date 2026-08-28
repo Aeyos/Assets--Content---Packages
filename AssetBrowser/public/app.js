@@ -19,15 +19,18 @@
     pack: new Set(),
     tags: new Set(),
     showHidden: false,
+    noPreview: false,
   };
 
   const el = {
     search: document.getElementById('search'),
     rescan: document.getElementById('rescan'),
     showHidden: document.getElementById('show-hidden'),
+    noPreview: document.getElementById('no-preview'),
     grid: document.getElementById('grid'),
     status: document.getElementById('status'),
     regenAll: document.getElementById('regen-all'),
+    findDupes: document.getElementById('find-dupes'),
     loadMore: document.getElementById('load-more'),
     clearFilters: document.getElementById('clear-filters'),
     pillsCategory: document.getElementById('pills-category'),
@@ -118,6 +121,7 @@
     const q = state.search.trim().toLowerCase();
     return items.filter((it) => {
       if (!state.showHidden && it.hidden) return false;
+      if (state.noPreview && !(it.assetType === 'model' && !it.thumb)) return false;
       if (skip !== 'category' && state.category.size && !state.category.has(it.category)) return false;
       if (skip !== 'theme' && state.theme.size && !state.theme.has(it.theme)) return false;
       if (skip !== 'pack' && state.pack.size && !state.pack.has(it.pack)) return false;
@@ -399,6 +403,161 @@
     showToast(cancelled
       ? `Stopped after ${done}/${targets.length} (${failed} failed)`
       : `Regenerated ${done - failed}/${targets.length} previews${failed ? `, ${failed} failed` : ''}`);
+  }
+
+  function formatBytes(n) {
+    if (n < 1024) return `${n} B`;
+    const units = ['KB', 'MB', 'GB', 'TB'];
+    let u = -1;
+    do { n /= 1024; u++; } while (n >= 1024 && u < units.length - 1);
+    return `${n.toFixed(1)} ${units[u]}`;
+  }
+
+  // The folder an item's actual file lives in, root-relative - this is what
+  // gets pointed at as the "blame" location for a newer duplicate.
+  function itemFolderPath(item) {
+    const parts = item.previewPath.split('/');
+    parts.pop();
+    return parts.join('/') || '(library root)';
+  }
+
+  let findDupesRunning = false;
+  let findDupesCancel = false;
+
+  async function findDuplicates() {
+    if (findDupesRunning) {
+      findDupesCancel = true;
+      el.findDupes.disabled = true;
+      el.findDupes.textContent = 'Stopping…';
+      return;
+    }
+
+    const targets = filtered;
+    if (!targets.length) {
+      showToast('No items in the current view');
+      return;
+    }
+
+    findDupesRunning = true;
+    findDupesCancel = false;
+    el.findDupes.classList.add('active');
+    const hashed = [];
+    let done = 0;
+    let failed = 0;
+
+    for (const item of targets) {
+      if (findDupesCancel) break;
+      el.findDupes.textContent = `Stop (${done}/${targets.length})`;
+      try {
+        const res = await fetch('/api/hash-item', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: item.id }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Hashing failed');
+        hashed.push({ item, hash: data.hash, size: data.size, mtimeMs: data.mtimeMs });
+      } catch {
+        failed++;
+      }
+      done++;
+    }
+
+    const cancelled = findDupesCancel;
+    findDupesRunning = false;
+    findDupesCancel = false;
+    el.findDupes.classList.remove('active');
+    el.findDupes.disabled = false;
+    el.findDupes.textContent = 'Find duplicates';
+
+    const byHash = new Map();
+    for (const h of hashed) {
+      if (!byHash.has(h.hash)) byHash.set(h.hash, []);
+      byHash.get(h.hash).push(h);
+    }
+    // Oldest file in each group is treated as the original; every later
+    // (newer, by file mtime) entry sharing its hash is the "offending" copy.
+    const clusters = [...byHash.values()]
+      .filter((g) => g.length > 1)
+      .map((g) => [...g].sort((a, b) => a.mtimeMs - b.mtimeMs))
+      .sort((a, b) => (b[0].size * (b.length - 1)) - (a[0].size * (a.length - 1)));
+
+    const scanned = done - failed;
+    if (!clusters.length) {
+      showToast(cancelled
+        ? `Stopped after ${done}/${targets.length} - no duplicates found yet${failed ? ` (${failed} failed)` : ''}`
+        : `Scanned ${scanned}/${targets.length} - no duplicate files found${failed ? `, ${failed} failed` : ''}`);
+      return;
+    }
+    openDuplicatesReport(clusters, { scanned, total: targets.length, cancelled });
+  }
+
+  function buildDupeRow(entry, kind, label) {
+    const row = document.createElement('div');
+    row.className = 'dupe-item';
+
+    const badge = document.createElement('span');
+    badge.className = `dupe-badge ${kind}`;
+    badge.textContent = label;
+
+    const info = document.createElement('div');
+    info.className = 'dupe-info';
+    const name = document.createElement('div');
+    name.className = 'dupe-name';
+    name.textContent = entry.item.name;
+    const folder = document.createElement('div');
+    folder.className = 'dupe-path';
+    folder.textContent = itemFolderPath(entry.item);
+    folder.title = folder.textContent;
+    info.append(name, folder);
+
+    const meta = document.createElement('div');
+    meta.className = 'dupe-meta';
+    meta.textContent = `Modified ${new Date(entry.mtimeMs).toLocaleDateString()}`;
+
+    const revealBtn = document.createElement('button');
+    revealBtn.className = 'icon-btn';
+    revealBtn.type = 'button';
+    revealBtn.appendChild(makeIcon('folder_open'));
+    revealBtn.title = 'Reveal in Explorer';
+    revealBtn.addEventListener('click', () => reveal(entry.item));
+
+    row.append(badge, info, meta, revealBtn);
+    return row;
+  }
+
+  function openDuplicatesReport(clusters, meta) {
+    const { body } = createViewerShell({ name: 'Duplicate assets' }, { bodyClass: 'viewer-body-dupes' });
+
+    const wastedTotal = clusters.reduce((sum, g) => sum + g[0].size * (g.length - 1), 0);
+    const summary = document.createElement('div');
+    summary.className = 'dupes-summary';
+    summary.textContent = `${clusters.length} duplicate set(s) found among ${meta.scanned}/${meta.total} scanned item(s)`
+      + (meta.cancelled ? ' (stopped early)' : '')
+      + ` - ${formatBytes(wastedTotal)} reclaimable by removing the newer copies.`;
+    body.appendChild(summary);
+
+    for (const group of clusters) {
+      const [original, ...offenders] = group;
+      const box = document.createElement('div');
+      box.className = 'dupe-group';
+      box.title = `sha1:${original.hash}`;
+
+      const header = document.createElement('div');
+      header.className = 'dupe-group-header';
+      header.textContent = `${group.length} identical files, ${formatBytes(original.size)} each`;
+      const wasted = document.createElement('span');
+      wasted.className = 'wasted';
+      wasted.textContent = `(${formatBytes(original.size * offenders.length)} reclaimable)`;
+      header.appendChild(wasted);
+      box.appendChild(header);
+
+      box.appendChild(buildDupeRow(original, 'original', 'Kept - oldest copy'));
+      for (const off of offenders) {
+        box.appendChild(buildDupeRow(off, 'offender', 'Duplicate - newer, blame this folder'));
+      }
+      body.appendChild(box);
+    }
   }
 
   async function copyFile(item, btn) {
@@ -764,8 +923,15 @@
 
   el.regenAll.addEventListener('click', regenAllPreviews);
 
+  el.findDupes.addEventListener('click', findDuplicates);
+
   el.showHidden.addEventListener('change', () => {
     state.showHidden = el.showHidden.checked;
+    onFiltersChanged();
+  });
+
+  el.noPreview.addEventListener('change', () => {
+    state.noPreview = el.noPreview.checked;
     onFiltersChanged();
   });
 

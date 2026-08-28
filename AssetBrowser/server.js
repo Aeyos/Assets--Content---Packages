@@ -5,6 +5,7 @@ const os = require('os');
 const { exec, spawn } = require('child_process');
 const { buildIndex } = require('./indexer');
 const cacheStore = require('./cache');
+const hashCacheStore = require('./hash-cache');
 
 // No more requiring assets to live under a specific folder structure - the
 // browser always scans its own parent folder, recursively, for whatever is there.
@@ -23,6 +24,7 @@ const app = express();
 app.use(express.json());
 
 let assetCache = cacheStore.loadCache();
+let fileHashCache = hashCacheStore.loadHashCache();
 let cachedIndex = null;
 
 function reindex() {
@@ -224,6 +226,28 @@ app.post('/api/generate-thumb', (req, res) => {
       res.status(500).json({ error: message });
     }
   });
+});
+
+// Hashes one item's file (reusing the on-disk cache when the file hasn't
+// changed since it was last hashed), for the client-side duplicate finder to
+// call one item at a time - same "one at a time, with progress" shape as
+// /api/generate-thumb so it can drive the same kind of Stop-able bulk button.
+app.post('/api/hash-item', async (req, res) => {
+  const { id } = req.body || {};
+  const item = getIndex().find((i) => i.id === id);
+  if (!item) return res.status(404).json({ error: 'not found' });
+
+  const resolved = withinRoot(item.filePath);
+  if (!resolved) return res.status(400).json({ error: 'invalid path' });
+  if (!fs.existsSync(resolved)) return res.status(404).json({ error: `Source file no longer exists: ${resolved}` });
+
+  try {
+    const { hash, size, mtimeMs, cached } = await hashCacheStore.hashWithCache(fileHashCache, ASSETS_ROOT, resolved);
+    if (!cached) hashCacheStore.saveHashCache(fileHashCache);
+    res.json({ id: item.id, hash, size, mtimeMs });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // Resolve the exact sibling files (materials, buffers, textures) a model

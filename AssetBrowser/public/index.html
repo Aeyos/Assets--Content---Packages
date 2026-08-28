@@ -17,6 +17,10 @@
       <input id="show-hidden" type="checkbox" />
       <span>Show hidden</span>
     </label>
+    <label class="toggle" title="Show only 3D models that have no generated preview thumbnail">
+      <input id="no-preview" type="checkbox" />
+      <span>No preview</span>
+    </label>
   </header>
 
   <main>
@@ -44,6 +48,7 @@
       <div id="status-bar">
         <div id="status"></div>
         <button id="regen-all" type="button" title="Regenerate the preview for every renderable item currently shown by the filters/search, one at a time">Regenerate all previews</button>
+        <button id="find-dupes" type="button" title="Hash every item currently shown by the filters/search, one at a time, and flag byte-identical duplicates">Find duplicates</button>
       </div>
       <div id="grid" class="grid"></div>
       <button id="load-more" class="load-more" hidden>Show more</button>
