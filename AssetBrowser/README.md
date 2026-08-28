@@ -164,6 +164,9 @@ All endpoints are JSON over HTTP, served by `server.js`.
 ## Project structure
 
 ```
+start_asset_browser.bat          Windows launch script
+start_asset_browser.sh           Linux launch script
+start_asset_browser_mac.command  macOS launch script
 AssetBrowser/
   server.js              Express server: indexing lifecycle, thumbnail generation, all API routes
   indexer.js              Recursive folder walk -> grouped, typed asset list
@@ -176,10 +179,9 @@ AssetBrowser/
     app.js                 All client-side logic: search/filters, cards, tagging UI, previews
     style.css               Styling
     icons/                 Material Icons SVGs used for the card action buttons
-  start_asset_browser.bat          Windows launch script
-  start_asset_browser.sh          Linux launch script
-  start_asset_browser_mac.command  macOS launch script
 ```
+
+The launch scripts live one level above `AssetBrowser/` - i.e. in the folder you're browsing - since that's the natural place to double-click from. They `cd` into `AssetBrowser/` internally before doing anything else.
 
 ## Platform support
 
