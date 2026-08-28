@@ -89,6 +89,15 @@ function recycleFiles(absPaths) {
 
 class ModelAssetError extends Error {}
 
+// Same 1x1 transparent PNG the in-browser viewer writes for missing textures
+// (see PLACEHOLDER_PNG_BASE64 in public/app.js) - f3d's native glTF/OBJ
+// readers hard-fail the whole scene load if a referenced image file is
+// absent, so a real (if blank) file has to exist at that path.
+const PLACEHOLDER_PNG_BYTES = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+  'base64'
+);
+
 // f3d has no loader for .blend, so previewing one means exporting it to FBX
 // via Blender's own CLI first. The export is cached next to the source
 // (<base>.blendpreview.fbx, filtered out of the index by indexer.js) and
@@ -340,6 +349,10 @@ app.post('/api/generate-thumb', async (req, res) => {
     '--load-plugins=assimp',
     '--no-background',
   ];
+  // f3d's format auto-detection rejects some real-world FBX files (e.g. ASCII
+  // FBX exports) that assimp's FBX reader actually handles fine once picked
+  // directly, so skip detection and go straight to it for every .fbx input.
+  if (extOf(stagedInput) === 'fbx') args.push('--force-reader=FBX');
   const proc = spawn(F3D_BIN, args, { timeout: RENDER_TIMEOUT_MS });
   let stdout = '';
   let stderr = '';
@@ -487,11 +500,16 @@ function stageForRender(renderPath) {
   const ext = extOf(renderPath);
 
   if (ext === 'gltf' || ext === 'obj') {
-    const { mainFile, files } = collectModelAssets(renderPath);
+    const { mainFile, files, missing } = collectModelAssets(renderPath);
     for (const f of files) {
       const dest = path.join(stageDir, ...f.relPath.split('/'));
       fs.mkdirSync(path.dirname(dest), { recursive: true });
       fs.copyFileSync(f.abs, dest);
+    }
+    for (const m of missing) {
+      const dest = path.join(stageDir, ...m.relPath.split('/'));
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      fs.writeFileSync(dest, PLACEHOLDER_PNG_BYTES);
     }
     return { stageDir, stagedInput: path.join(stageDir, ...mainFile.split('/')) };
   }
