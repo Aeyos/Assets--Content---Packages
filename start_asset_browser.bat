@@ -7,7 +7,7 @@ rem Installs dependencies on first run, warns (without blocking) if the F3D
 rem CLI isn't available for server-side thumbnail generation, starts the
 rem server, and opens it in your default browser once it's up.
 
-cd /d "%~dp0"
+cd /d "%~dp0AssetBrowser"
 
 if not defined PORT set PORT=4747
 set URL=http://localhost:%PORT%

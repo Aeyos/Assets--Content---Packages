@@ -64,16 +64,15 @@ node server.js
 
 By default the server listens on **http://localhost:4747** and indexes the *parent* of the `AssetBrowser` folder (i.e. wherever you've dropped this tool inside your asset library). Open that URL in a browser once it prints `Asset browser running at http://localhost:<port>`.
 
-Two convenience launch scripts are included:
+Three convenience launch scripts are included, one level up from this folder - in the repo root, next to `AssetBrowser/` itself:
 
 | Script | Platform | Usage |
 |---|---|---|
+| `start_asset_browser.bat` | Windows | Double-click in Explorer, or `start_asset_browser.bat` from a terminal |
 | `start_asset_browser.sh` | Linux (and WSL) | `./start_asset_browser.sh` from a terminal |
 | `start_asset_browser_mac.command` | macOS | Double-click in Finder, or `./start_asset_browser_mac.command` from a terminal |
 
-Both scripts `cd` into the script's own directory first (so it doesn't matter where you invoke them from), run `npm install` automatically the first time (or whenever `node_modules` is missing), warn you if no `f3d` binary can be found, and then start the server and open your default browser to it.
-
-There is no bundled Windows launcher since the app is normally run there directly with `npm start` (or `node server.js`) from a terminal already open in the project.
+All three resolve their own location and `cd` into the `AssetBrowser` folder next to them first (so it doesn't matter where you invoke them from), run `npm install` automatically the first time (or whenever `node_modules` is missing), warn you if no `f3d` binary can be found, and then start the server and open your default browser to it.
 
 Stop the server with `Ctrl+C`.
 
@@ -177,6 +176,7 @@ AssetBrowser/
     app.js                 All client-side logic: search/filters, cards, tagging UI, previews
     style.css               Styling
     icons/                 Material Icons SVGs used for the card action buttons
+  start_asset_browser.bat          Windows launch script
   start_asset_browser.sh          Linux launch script
   start_asset_browser_mac.command  macOS launch script
 ```
