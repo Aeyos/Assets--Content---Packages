@@ -13,13 +13,17 @@
       <input id="search" type="search" placeholder="Search assets by name or pack..." autocomplete="off" />
       <button id="rescan" title="Re-scan the Assets folder for changes">Rescan</button>
     </div>
+    <label class="toggle" title="Show assets you've hidden from the browser">
+      <input id="show-hidden" type="checkbox" />
+      <span>Show hidden</span>
+    </label>
   </header>
 
   <main>
     <aside id="filters">
       <div class="filter-group">
-        <h2>Category</h2>
-        <div id="pills-category" class="pills"></div>
+        <h2>Tags</h2>
+        <div id="pills-tags" class="pills pills-scroll"></div>
       </div>
       <div class="filter-group">
         <h2>Theme</h2>
@@ -28,6 +32,10 @@
       <div class="filter-group">
         <h2>Pack</h2>
         <div id="pills-pack" class="pills pills-scroll"></div>
+      </div>
+      <div class="filter-group">
+        <h2>Category</h2>
+        <div id="pills-category" class="pills"></div>
       </div>
       <button id="clear-filters">Clear all filters</button>
     </aside>
@@ -41,6 +49,8 @@
       <button id="load-more" class="load-more" hidden>Show more</button>
     </section>
   </main>
+
+  <datalist id="known-tags"></datalist>
 
   <script src="app.js"></script>
 </body>

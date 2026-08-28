@@ -72,6 +72,21 @@ header h1 {
 
 #rescan:hover { color: var(--text); border-color: var(--accent); }
 
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-dim);
+  font-size: 13px;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+
+.toggle:hover { color: var(--text); }
+
+.toggle input { accent-color: var(--accent); }
+
 main {
   display: grid;
   grid-template-columns: 260px 1fr;
@@ -319,6 +334,82 @@ main {
   padding: 1px 5px;
 }
 
+.card.is-hidden {
+  opacity: 0.5;
+}
+
+.card.is-hidden .thumb::after {
+  content: 'Hidden';
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  background: rgba(28, 31, 38, 0.85);
+  color: var(--text-dim);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+}
+
+.tags-row {
+  margin-top: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+
+.tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  background: var(--panel-2);
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 4px 1px 8px;
+}
+
+.tag-remove {
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  padding: 2px;
+}
+
+.tag-remove:hover { color: #ff8b87; }
+
+.tag-add {
+  border: 1px dashed var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 10px;
+  line-height: 1;
+  border-radius: 999px;
+  padding: 2px 7px;
+}
+
+.tag-add:hover { color: var(--text); border-color: var(--accent); }
+
+.tag-input {
+  width: 96px;
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--accent);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.tag-input:focus { outline: none; }
+
 .load-more {
   display: block;
   margin: 20px auto;
@@ -448,4 +539,34 @@ main {
   border: 2px solid var(--border);
   border-top-color: var(--accent);
   animation: spin-pulse 0.8s linear infinite;
+}
+
+.viewer-body-image {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.preview-image {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.viewer-body-audio {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+}
+
+.preview-audio-icon {
+  font-size: 64px;
+  opacity: 0.6;
+}
+
+.viewer-body-audio audio {
+  width: min(420px, 80%);
 }

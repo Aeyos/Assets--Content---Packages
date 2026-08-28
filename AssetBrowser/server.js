@@ -1,10 +1,14 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const { exec, spawn } = require('child_process');
 const { buildIndex } = require('./indexer');
+const cacheStore = require('./cache');
 
-const ASSETS_ROOT = process.env.ASSETS_ROOT || 'C:\\Users\\vinic\\Desktop\\Assets';
+// No more requiring assets to live under a specific folder structure - the
+// browser always scans its own parent folder, recursively, for whatever is there.
+const ASSETS_ROOT = process.env.ASSETS_ROOT || path.resolve(__dirname, '..');
 const PORT = process.env.PORT || 4747;
 const F3D_BIN = process.env.F3D_BIN || 'f3d';
 const PWSH_BIN = process.env.PWSH_BIN || 'powershell.exe';
@@ -18,11 +22,21 @@ const COPY_FORMAT_PRIORITY = ['fbx', 'obj', 'gltf', 'glb', 'blend'];
 const app = express();
 app.use(express.json());
 
+let assetCache = cacheStore.loadCache();
 let cachedIndex = null;
+
+function reindex() {
+  const items = buildIndex(ASSETS_ROOT);
+  cacheStore.reconcile(assetCache, items);
+  cacheStore.saveCache(assetCache);
+  cachedIndex = items;
+  return cachedIndex;
+}
+
 function getIndex() {
   if (!cachedIndex) {
     console.log('Indexing', ASSETS_ROOT, '...');
-    cachedIndex = buildIndex(ASSETS_ROOT);
+    reindex();
     console.log('Indexed', cachedIndex.length, 'items.');
   }
   return cachedIndex;
@@ -53,8 +67,51 @@ app.get('/api/assets', (req, res) => {
 });
 
 app.post('/api/rescan', (req, res) => {
-  cachedIndex = buildIndex(ASSETS_ROOT);
+  reindex();
   res.json({ count: cachedIndex.length });
+});
+
+app.get('/api/tags', (req, res) => {
+  res.json([...assetCache.tags].sort((a, b) => a.localeCompare(b)));
+});
+
+app.post('/api/tags', (req, res) => {
+  const name = String((req.body || {}).name || '').trim();
+  if (!name) return res.status(400).json({ error: 'Tag name is required' });
+  cacheStore.addTagToRegistry(assetCache, name);
+  cacheStore.saveCache(assetCache);
+  res.json([...assetCache.tags].sort((a, b) => a.localeCompare(b)));
+});
+
+app.post('/api/assets/:id/tags', (req, res) => {
+  const id = Number(req.params.id);
+  const item = getIndex().find((i) => i.id === id);
+  if (!item) return res.status(404).json({ error: 'not found' });
+
+  const { tag, action } = req.body || {};
+  const name = String(tag || '').trim();
+  if (!name) return res.status(400).json({ error: 'Tag name is required' });
+
+  if (action === 'remove') {
+    item.tags = item.tags.filter((t) => t.toLowerCase() !== name.toLowerCase());
+  } else {
+    if (!item.tags.some((t) => t.toLowerCase() === name.toLowerCase())) item.tags.push(name);
+    cacheStore.addTagToRegistry(assetCache, name);
+  }
+  cacheStore.persistItem(assetCache, item);
+  cacheStore.saveCache(assetCache);
+  res.json({ tags: item.tags, allTags: [...assetCache.tags].sort((a, b) => a.localeCompare(b)) });
+});
+
+app.post('/api/assets/:id/hidden', (req, res) => {
+  const id = Number(req.params.id);
+  const item = getIndex().find((i) => i.id === id);
+  if (!item) return res.status(404).json({ error: 'not found' });
+
+  item.hidden = !!(req.body || {}).hidden;
+  cacheStore.persistItem(assetCache, item);
+  cacheStore.saveCache(assetCache);
+  res.json({ hidden: item.hidden });
 });
 
 app.post('/api/reveal', (req, res) => {
@@ -121,8 +178,24 @@ app.post('/api/generate-thumb', (req, res) => {
   const base = path.basename(renderPath, path.extname(renderPath));
   const outPath = path.join(dir, `${base}_thumb.png`);
 
+  // f3d's native glTF/OBJ readers resolve the input through a URI parser that
+  // rejects "[" and "]" - characters that show up constantly in asset-store
+  // pack folder names (e.g. "MegaKit[Standard]"). Stage a bracket-free copy
+  // of the model, plus whatever sibling files it references, in a temp dir
+  // and point f3d at that; the output thumbnail still lands next to the real
+  // source file, since --output isn't run through that same URI parsing.
+  let stageDir;
+  let stagedInput;
+  try {
+    ({ stageDir, stagedInput } = stageForRender(renderPath));
+  } catch (e) {
+    if (e instanceof ModelAssetError) return res.status(422).json({ error: e.message });
+    throw e;
+  }
+  const cleanup = () => fs.rm(stageDir, { recursive: true, force: true }, () => {});
+
   const args = [
-    renderPath,
+    stagedInput,
     `--output=${outPath}`,
     '--resolution=512,512',
     '--load-plugins=assimp',
@@ -135,10 +208,12 @@ app.post('/api/generate-thumb', (req, res) => {
   proc.stderr.on('data', (d) => { stderr += d; });
 
   proc.on('error', (err) => {
+    cleanup();
     res.status(500).json({ error: `Could not launch f3d (${F3D_BIN}): ${err.message}` });
   });
 
   proc.on('close', (code) => {
+    cleanup();
     if (res.headersSent) return;
     if (code === 0 && fs.existsSync(outPath)) {
       const thumb = path.relative(ASSETS_ROOT, outPath).split(path.sep).join('/');
@@ -233,12 +308,36 @@ function collectModelAssets(mainPath) {
     files: [...refs].map((abs) => ({
       relPath: toUrlPath(path.relative(commonRoot, abs)),
       url: '/files/' + toUrlPath(path.relative(ASSETS_ROOT, abs)),
+      abs,
     })),
     missing: [...missing].map((abs) => ({
       relPath: toUrlPath(path.relative(commonRoot, abs)),
       name: path.basename(abs),
     })),
   };
+}
+
+// Copies a model into a fresh temp directory - using collectModelAssets' own
+// closure of referenced sibling files for gltf/obj, so relative buffer/image
+// URIs still resolve - so f3d never sees the source asset library's path at
+// all. See the comment at the generate-thumb route for why that's needed.
+function stageForRender(renderPath) {
+  const stageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'assetbrowser-render-'));
+  const ext = extOf(renderPath);
+
+  if (ext === 'gltf' || ext === 'obj') {
+    const { mainFile, files } = collectModelAssets(renderPath);
+    for (const f of files) {
+      const dest = path.join(stageDir, ...f.relPath.split('/'));
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      fs.copyFileSync(f.abs, dest);
+    }
+    return { stageDir, stagedInput: path.join(stageDir, ...mainFile.split('/')) };
+  }
+
+  const dest = path.join(stageDir, path.basename(renderPath));
+  fs.copyFileSync(renderPath, dest);
+  return { stageDir, stagedInput: dest };
 }
 
 app.get('/api/model-assets/:id', (req, res) => {
