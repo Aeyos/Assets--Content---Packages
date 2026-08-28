@@ -1,0 +1,14 @@
+{
+  "name": "asset-browser",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local web UI for searching and browsing the sorted game-dev asset library",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "f3d": "^3.5.0"
+  }
+}
