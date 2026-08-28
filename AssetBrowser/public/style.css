@@ -260,6 +260,18 @@ main {
 
 .icon-btn:hover { border-color: var(--accent); color: var(--accent); }
 
+.icon-btn .icon {
+  width: 15px;
+  height: 15px;
+  background-color: currentColor;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+}
+
 .icon-btn:disabled {
   cursor: not-allowed;
   opacity: 0.35;

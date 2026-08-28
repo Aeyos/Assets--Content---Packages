@@ -254,7 +254,7 @@
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to update');
       item.hidden = data.hidden;
-      btn.textContent = item.hidden ? '👁️' : '🙈';
+      btn.replaceChildren(makeIcon(item.hidden ? 'visibility' : 'visibility_off'));
       btn.title = item.hidden ? 'Unhide' : 'Hide from browser';
       card.classList.toggle('is-hidden', item.hidden);
       if (item.hidden && !state.showHidden) removeCardFromView(item);
@@ -287,6 +287,17 @@
     el.grid.appendChild(frag);
     shownCount += next.length;
     el.loadMore.hidden = shownCount >= filtered.length;
+  }
+
+  // Material Icons (single-color, mask-based so they pick up currentColor -
+  // including the hover/busy/failed states .icon-btn already defines, which
+  // plain emoji glyphs never responded to).
+  function makeIcon(name) {
+    const span = document.createElement('span');
+    span.className = 'icon';
+    span.style.maskImage = `url('icons/${name}.svg')`;
+    span.style.webkitMaskImage = `url('icons/${name}.svg')`;
+    return span;
   }
 
   function filesUrl(relPath) {
@@ -420,7 +431,7 @@
     const hideBtn = document.createElement('button');
     hideBtn.className = 'icon-btn';
     hideBtn.type = 'button';
-    hideBtn.textContent = item.hidden ? '👁️' : '🙈';
+    hideBtn.appendChild(makeIcon(item.hidden ? 'visibility' : 'visibility_off'));
     hideBtn.title = item.hidden ? 'Unhide' : 'Hide from browser';
     hideBtn.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -430,7 +441,7 @@
     const copyBtn = document.createElement('button');
     copyBtn.className = 'icon-btn';
     copyBtn.type = 'button';
-    copyBtn.textContent = '📋';
+    copyBtn.appendChild(makeIcon('content_copy'));
     copyBtn.title = 'Copy file to clipboard';
     copyBtn.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -440,7 +451,7 @@
     const regenBtn = document.createElement('button');
     regenBtn.className = 'icon-btn';
     regenBtn.type = 'button';
-    regenBtn.textContent = '🔄';
+    regenBtn.appendChild(makeIcon('refresh'));
     regenBtn.title = item.renderable ? 'Regenerate preview' : 'No renderable format available';
     regenBtn.disabled = !item.renderable;
     regenBtn.addEventListener('click', (e) => {
@@ -451,7 +462,7 @@
     const revealBtn = document.createElement('button');
     revealBtn.className = 'icon-btn';
     revealBtn.type = 'button';
-    revealBtn.textContent = '📁';
+    revealBtn.appendChild(makeIcon('folder_open'));
     revealBtn.title = 'Reveal in Explorer';
     revealBtn.addEventListener('click', (e) => {
       e.stopPropagation();
